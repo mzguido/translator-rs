@@ -1666,6 +1666,21 @@ pub fn detected_lines_read_vertically(boxes: &[DetectedTextBox]) -> bool {
 /// `group_live_lines_into_blocks_in_quadrant(lines, Quadrant::R0)`. Kept
 /// as a no-arg shim for callers that don't yet know about the scene
 /// canonical quadrant (still-image OCR, legacy tests, doc-style pages).
+/// Process-wide toggle: when `true`, still images (photos, shared images, assistant
+/// screenshots) group horizontal lines with the live-camera grouper, which merges
+/// center-aligned stacks such as comic speech bubbles. When `false` (default) they use
+/// the left-aligned document grouper `group_lines_into_paragraphs`.
+static STILL_IMAGE_CENTERED_GROUPING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_still_image_centered_grouping(enabled: bool) {
+    STILL_IMAGE_CENTERED_GROUPING.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn still_image_centered_grouping() -> bool {
+    STILL_IMAGE_CENTERED_GROUPING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn group_live_lines_into_blocks(lines: Vec<TextLine>) -> Vec<TextBlock> {
     group_live_lines_into_blocks_in_quadrant(lines, crate::coords::Quadrant::R0)
 }

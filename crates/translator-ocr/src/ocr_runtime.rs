@@ -520,7 +520,11 @@ fn still_ppocr_lines_to_blocks(
         .collect();
     match reading_order {
         ReadingOrder::LeftToRight => {
-            translator_core::ocr::group_lines_into_paragraphs(text_lines, Default::default())
+            if translator_core::ocr::still_image_centered_grouping() {
+                translator_core::ocr::group_live_lines_into_blocks(text_lines)
+            } else {
+                translator_core::ocr::group_lines_into_paragraphs(text_lines, Default::default())
+            }
         }
         ReadingOrder::TopToBottomRightToLeft => {
             translator_core::ocr::group_vertical_lines_into_paragraphs(
