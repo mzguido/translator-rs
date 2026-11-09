@@ -951,9 +951,20 @@ fn translate_from_sources(
         return Ok((block_texts, styles));
     }
 
+    // ALL-CAPS lettering (comics, signs) translates poorly: the models were trained on
+    // normally-cased text. Feed such blocks in sentence case and upper-case the result back.
+    let english_source = source_code.as_str() == "en";
+    let mut caps_blocks = Vec::with_capacity(non_empty_indices.len());
     let texts_to_translate = non_empty_indices
         .iter()
-        .map(|&index| block_texts[index].clone())
+        .map(|&index| {
+            let text = &block_texts[index];
+            let normalized = is_mostly_uppercase(text)
+                .then(|| to_sentence_case(text, english_source))
+                .flatten();
+            caps_blocks.push(normalized.is_some());
+            normalized.unwrap_or_else(|| text.clone())
+        })
         .collect::<Vec<_>>();
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let on_progress = |_: usize, _: usize| {};
@@ -975,7 +986,11 @@ fn translate_from_sources(
             for (slot, &bi) in non_empty_indices.iter().enumerate() {
                 let twa = &results[slot];
                 target_styles[bi] = remap_block_styles(&sources[bi].1, twa);
-                translated_blocks[bi] = twa.translated_text.clone();
+                translated_blocks[bi] = if caps_blocks[slot] {
+                    restore_uppercase(&twa.translated_text)
+                } else {
+                    twa.translated_text.clone()
+                };
             }
         }
         None => {
@@ -986,11 +1001,109 @@ fn translate_from_sources(
                 &texts_to_translate,
             )?;
             for (slot, &bi) in non_empty_indices.iter().enumerate() {
-                translated_blocks[bi] = translated[slot].clone();
+                translated_blocks[bi] = if caps_blocks[slot] {
+                    restore_uppercase(&translated[slot])
+                } else {
+                    translated[slot].clone()
+                };
             }
         }
     }
     Ok((translated_blocks, target_styles))
+}
+
+/// True when the text is lettered in capitals: at least 4 cased letters, ≥ 80% of them uppercase.
+fn is_mostly_uppercase(text: &str) -> bool {
+    let (mut upper, mut cased) = (0usize, 0usize);
+    for c in text.chars() {
+        if c.is_uppercase() {
+            upper += 1;
+            cased += 1;
+        } else if c.is_lowercase() {
+            cased += 1;
+        }
+    }
+    cased >= 4 && upper * 5 >= cased * 4
+}
+
+/// Lower-case `text`, then capitalise the first letter of each sentence (and, for English, the
+/// lone pronoun "I", including "I'm"/"I'll"). Returns `None` when case mapping would change the
+/// byte length, so source-space byte ranges (styles, alignments) stay valid.
+fn to_sentence_case(text: &str, english: bool) -> Option<String> {
+    let lower = text.to_lowercase();
+    if lower.len() != text.len() {
+        return None;
+    }
+    let chars: Vec<char> = lower.chars().collect();
+    let mut out = String::with_capacity(lower.len());
+    let mut capitalize_next = true;
+    for (i, &c) in chars.iter().enumerate() {
+        if c.is_alphabetic() {
+            let prev_is_word = i > 0 && chars[i - 1].is_alphanumeric();
+            let next_is_word = chars.get(i + 1).is_some_and(|n| n.is_alphanumeric());
+            let lone_i = english && c == 'i' && !prev_is_word && !next_is_word;
+            if capitalize_next || lone_i {
+                out.extend(c.to_uppercase());
+            } else {
+                out.push(c);
+            }
+            capitalize_next = false;
+        } else {
+            out.push(c);
+            if matches!(c, '.' | '!' | '?' | '…') {
+                capitalize_next = true;
+            }
+        }
+    }
+    (out.len() == text.len()).then_some(out)
+}
+
+/// Upper-case a translation back to match capitals lettering; keeps the text as-is when that
+/// would change its byte length (target-space style ranges index into it).
+fn restore_uppercase(text: &str) -> String {
+    let upper = text.to_uppercase();
+    if upper.len() == text.len() {
+        upper
+    } else {
+        text.to_string()
+    }
+}
+
+#[cfg(test)]
+mod caps_tests {
+    use super::{is_mostly_uppercase, restore_uppercase, to_sentence_case};
+
+    #[test]
+    fn detects_capitals_lettering() {
+        assert!(is_mostly_uppercase("COULD YOU RELAY THESE WORDS TO MARQUIS BRANFORD?"));
+        assert!(!is_mostly_uppercase("Could you relay these words?"));
+        assert!(!is_mostly_uppercase("OK"));
+        assert!(!is_mostly_uppercase("12:30 — 45%"));
+    }
+
+    #[test]
+    fn sentence_cases_comic_text() {
+        assert_eq!(
+            to_sentence_case("COULD YOU RELAY THESE WORDS TO MARQUIS BRANFORD?", true).as_deref(),
+            Some("Could you relay these words to marquis branford?"),
+        );
+        assert_eq!(
+            to_sentence_case("WAIT! I'M COMING. I THINK SO...", true).as_deref(),
+            Some("Wait! I'm coming. I think so..."),
+        );
+        // Non-English source: "i" is not special-cased.
+        assert_eq!(to_sentence_case("SI, I LIBRI", false).as_deref(), Some("Si, i libri"));
+        // Byte length must be preserved for range bookkeeping.
+        let input = "ÉTÉ À PARIS";
+        assert_eq!(to_sentence_case(input, false).unwrap().len(), input.len());
+    }
+
+    #[test]
+    fn restores_uppercase_when_safe() {
+        assert_eq!(restore_uppercase("¿Podrías contarle?"), "¿PODRÍAS CONTARLE?");
+        // The "ﬁ" ligature upper-cases to "FI", changing byte length: leave untouched.
+        assert_eq!(restore_uppercase("ﬁn"), "ﬁn");
+    }
 }
 
 /// Re-translate a cached overlay to a new language in place, re-remapping the styles. Recovers each
