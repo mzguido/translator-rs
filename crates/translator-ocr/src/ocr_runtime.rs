@@ -1012,7 +1012,8 @@ fn translate_from_sources(
     Ok((translated_blocks, target_styles))
 }
 
-/// True when the text is lettered in capitals: at least 4 cased letters, ≥ 80% of them uppercase.
+/// True when the text is lettered in capitals: at least 2 cased letters (so short comic bubbles
+/// like "NO?" or "WHO?" count), ≥ 80% of them uppercase.
 fn is_mostly_uppercase(text: &str) -> bool {
     let (mut upper, mut cased) = (0usize, 0usize);
     for c in text.chars() {
@@ -1023,7 +1024,7 @@ fn is_mostly_uppercase(text: &str) -> bool {
             cased += 1;
         }
     }
-    cased >= 4 && upper * 5 >= cased * 4
+    cased >= 2 && upper * 5 >= cased * 4
 }
 
 /// Lower-case `text`, then capitalise the first letter of each sentence (and, for English, the
@@ -1077,7 +1078,9 @@ mod caps_tests {
     fn detects_capitals_lettering() {
         assert!(is_mostly_uppercase("COULD YOU RELAY THESE WORDS TO MARQUIS BRANFORD?"));
         assert!(!is_mostly_uppercase("Could you relay these words?"));
-        assert!(!is_mostly_uppercase("OK"));
+        assert!(is_mostly_uppercase("WHO?"));
+        assert!(is_mostly_uppercase("NO!"));
+        assert!(!is_mostly_uppercase("I"));
         assert!(!is_mostly_uppercase("12:30 — 45%"));
     }
 
@@ -1091,6 +1094,7 @@ mod caps_tests {
             to_sentence_case("WAIT! I'M COMING. I THINK SO...", true).as_deref(),
             Some("Wait! I'm coming. I think so..."),
         );
+        assert_eq!(to_sentence_case("WHO?", true).as_deref(), Some("Who?"));
         // Non-English source: "i" is not special-cased.
         assert_eq!(to_sentence_case("SI, I LIBRI", false).as_deref(), Some("Si, i libri"));
         // Byte length must be preserved for range bookkeeping.
